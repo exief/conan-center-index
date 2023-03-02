@@ -1,9 +1,12 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.build import cross_building
-from conan.tools.files import get, rename, rmdir
+from conan.tools.files import (
+    apply_conandata_patches, chdir, copy, export_conandata_patches,
+    get, load, rename, replace_in_file, rm, rmdir, save
+)
 from conan.tools.microsoft import is_msvc, msvc_runtime_flag
-from conans import AutoToolsBuildEnvironment, tools
+from conan.tools.gnu import Autotools, AutotoolsToolchain, AutotoolsDeps
 import contextlib
 import fnmatch
 import functools
@@ -15,6 +18,7 @@ required_conan_version = ">=1.47.0"
 
 class OpenSSLConan(ConanFile):
     name = "openssl"
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/openssl/openssl"
@@ -81,7 +85,7 @@ class OpenSSLConan(ConanFile):
         "no_ts": [True, False],
         "no_whirlpool": [True, False],
         "no_zlib": [True, False],
-        "openssldir": "ANY",
+        "openssldir": ["ANY", None]
     }
     default_options = {key: False for key in options.keys()}
     default_options["fPIC"] = True
@@ -97,8 +101,7 @@ class OpenSSLConan(ConanFile):
         return getattr(self, "settings_build", self.settings)
 
     def export_sources(self):
-        for patch in self.conan_data.get("patches", {}).get(self.version, []):
-            self.copy(patch["patch_file"])
+        export_conandata_patches(self)
 
     def config_options(self):
         if self.settings.os != "Windows":
@@ -114,9 +117,9 @@ class OpenSSLConan(ConanFile):
 
     def configure(self):
         if self.options.shared:
-            del self.options.fPIC
-        del self.settings.compiler.libcxx
-        del self.settings.compiler.cppstd
+            self.options.rm_safe("fPIC")
+        self.settings.rm_safe("compiler.libcxx")
+        self.settings.rm_safe("compiler.cppstd")
 
     def requirements(self):
         if not self.options.no_zlib:
@@ -125,17 +128,19 @@ class OpenSSLConan(ConanFile):
     def build_requirements(self):
         if self._settings_build.os == "Windows":
             if not self._win_bash:
-                self.build_requires("strawberryperl/5.30.0.1")
+                self.tool_requires("strawberryperl/5.30.0.1")
             if not self.options.no_asm and not tools.which("nasm"):
-                self.build_requires("nasm/2.15.05")
+                self.tool_requires("nasm/2.15.05")
         if self._win_bash:
-            if not tools.get_env("CONAN_BASH_PATH"):
-                self.build_requires("msys2/cci.latest")
+            if not self.conf.get("tools.microsoft.bash:path", check_type=str):
+                    self.tool_requires("msys2/cci.latest")
 
     def validate(self):
         if self.settings.os == "Emscripten":
             if not all((self.options.no_asm, self.options.no_threads, self.options.no_stdio)):
                 raise ConanInvalidConfiguration("os=Emscripten requires openssl:{no_asm,no_threads,no_stdio}=True")
+
+
 
     @property
     def _is_clangcl(self):
@@ -372,7 +377,7 @@ class OpenSSLConan(ConanFile):
 
     @functools.lru_cache(1)
     def _get_env_build(self):
-        return AutoToolsBuildEnvironment(self)
+        return AutotoolsToolchain(self).environment
 
     def _get_default_openssl_dir(self):
         if self.settings.os == "Linux":
@@ -437,9 +442,12 @@ class OpenSSLConan(ConanFile):
                 '--with-zlib-include="%s"' % include_path,
                 '--with-zlib-lib="%s"' % lib_path
             ])
-
-        for option_name in self.options.values.fields:
-            if self.options.get_safe(option_name, False) and option_name not in ("shared", "fPIC", "openssldir", "capieng_dialog", "enable_capieng", "zlib", "no_fips", "no_md2"):
+        if Version(conan_version).major < 2:
+            possible_values = self.options.values.fields
+        else:
+            possible_values = self.options.possible_values
+        for option_name in possible_values:
+            if self.options.get_safe(option_name) and option_name not in ("shared", "fPIC", "openssldir", "capieng_dialog", "enable_capieng", "zlib", "no_fips", "no_md2"):
                 self.output.info(f"Activated option: {option_name}")
                 args.append(option_name.replace("_", "-"))
         return args
