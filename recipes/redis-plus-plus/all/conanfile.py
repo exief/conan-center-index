@@ -1,22 +1,22 @@
 from conan import ConanFile
-from conan.errors import ConanInvalidConfiguration
+from conan.errors import ConanInvalidConfiguration, ConanException
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
-from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, replace_in_file, rmdir
+from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, rmdir
 from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.52.0"
+required_conan_version = ">=2.1"
 
 
 class RedisPlusPlusConan(ConanFile):
     name = "redis-plus-plus"
-    homepage = "https://github.com/sewenew/redis-plus-plus"
     description = "Redis client written in C++"
-    topics = ("database", "redis", "client", "tls")
-    url = "https://github.com/conan-io/conan-center-index"
     license = "Apache-2.0"
-
+    url = "https://github.com/conan-io/conan-center-index"
+    homepage = "https://github.com/sewenew/redis-plus-plus"
+    topics = ("database", "redis", "client", "tls")
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -33,7 +33,7 @@ class RedisPlusPlusConan(ConanFile):
 
     @property
     def _min_cppstd(self):
-        return "11" if Version(self.version) < "1.3.0" else "17"
+        return "11"
 
     @property
     def _compilers_minimum_version(self):
@@ -58,18 +58,15 @@ class RedisPlusPlusConan(ConanFile):
 
     def configure(self):
         if self.options.shared:
-            try:
-                del self.options.fPIC
-            except Exception:
-                pass
+            self.options.rm_safe("fPIC")
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
-        self.requires("hiredis/1.1.0")
+        self.requires("hiredis/1.2.0", transitive_headers=True, transitive_libs=True)
         if self.options.get_safe("build_async"):
-            self.requires("libuv/1.44.2")
+            self.requires("libuv/1.47.0")
 
     def validate(self):
         if self.info.settings.compiler.get_safe("cppstd"):
@@ -85,34 +82,28 @@ class RedisPlusPlusConan(ConanFile):
             raise ConanInvalidConfiguration(f"{self.name}:with_tls=True requires hiredis:with_ssl=True")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
-        if self.settings.compiler.get_safe("cppstd"):
-            cppstd = str(self.settings.compiler.cppstd)
-            if cppstd.startswith("gnu"):
-                cppstd = cppstd[3:]
-            tc.cache_variables["REDIS_PLUS_PLUS_CXX_STANDARD"] = cppstd
+        cppstd = str(self.settings.get_safe("compiler.cppstd", 11)).replace("gnu", "")
+        tc.cache_variables["REDIS_PLUS_PLUS_CXX_STANDARD"] = cppstd
         tc.variables["REDIS_PLUS_PLUS_USE_TLS"] = self.options.with_tls
         if self.options.get_safe("build_async"):
             tc.cache_variables["REDIS_PLUS_PLUS_BUILD_ASYNC"] = "libuv"
         tc.variables["REDIS_PLUS_PLUS_BUILD_TEST"] = False
         tc.variables["REDIS_PLUS_PLUS_BUILD_STATIC"] = not self.options.shared
         tc.variables["REDIS_PLUS_PLUS_BUILD_SHARED"] = self.options.shared
-        if Version(self.version) >= "1.2.3":
-            tc.variables["REDIS_PLUS_PLUS_BUILD_STATIC_WITH_PIC"] = self.options.shared
+        tc.variables["REDIS_PLUS_PLUS_BUILD_STATIC_WITH_PIC"] = self.options.shared
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
+        if Version(self.version) > "1.3.13": # pylint: disable=conan-unreachable-upper-version
+            raise ConanException("CMAKE_POLICY_VERSION_MINIMUM hardcoded to 3.5, check if new version supports CMake 4")
         tc.generate()
         deps = CMakeDeps(self)
         deps.generate()
 
     def _patch_sources(self):
         apply_conandata_patches(self)
-        if Version(self.version) < "1.2.3":
-            replace_in_file(self, os.path.join(self.source_folder, "CMakeLists.txt"),
-                                  "set_target_properties(${STATIC_LIB} PROPERTIES POSITION_INDEPENDENT_CODE ON)",
-                                  "")
 
     def build(self):
         self._patch_sources()
@@ -144,10 +135,5 @@ class RedisPlusPlusConan(ConanFile):
             self.cpp_info.components["redis++lib"].system_libs.append("pthread")
             self.cpp_info.components["redis++lib"].system_libs.append("m")
 
-        # TODO: to remove in conan v2
-        self.cpp_info.names["cmake_find_package"] = "redis++"
-        self.cpp_info.names["cmake_find_package_multi"] = "redis++"
-        self.cpp_info.components["redis++lib"].names["cmake_find_package"] = f"redis++{target_suffix}"
-        self.cpp_info.components["redis++lib"].names["cmake_find_package_multi"] = f"redis++{target_suffix}"
         self.cpp_info.components["redis++lib"].set_property("cmake_target_name", f"redis++::redis++{target_suffix}")
         self.cpp_info.components["redis++lib"].set_property("pkg_config_name", "redis++")

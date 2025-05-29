@@ -1,8 +1,9 @@
 from conan import ConanFile
-from conan.errors import ConanInvalidConfiguration
+from conan.errors import ConanInvalidConfiguration, ConanException
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
 from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get
+from conan.tools.scm import Version
 import os
 
 required_conan_version = ">=1.53.0"
@@ -15,6 +16,8 @@ class AnyRPCConan(ConanFile):
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/sgieseking/anyrpc"
     topics = ("rpc",)
+
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -66,7 +69,10 @@ class AnyRPCConan(ConanFile):
             check_min_cppstd(self, self._min_cppstd)
 
         if self.options.with_log4cplus and self.options.with_wchar:
-            raise ConanInvalidConfiguration(f"{self.ref} can not be built with both log4cplus and wchar, see https://github.com/sgieseking/anyrpc/issues/25")
+            raise ConanInvalidConfiguration(
+                f"{self.ref} can not be built with both log4cplus and wchar, see"
+                " https://github.com/sgieseking/anyrpc/issues/25"
+            )
 
     def source(self):
         get(self, **self.conan_data["sources"][self.version], strip_root=True)
@@ -84,8 +90,10 @@ class AnyRPCConan(ConanFile):
         tc.variables["BUILD_PROTOCOL_JSON"] = self.options.with_protocol_json
         tc.variables["BUILD_PROTOCOL_XML"] = self.options.with_protocol_xml
         tc.variables["BUILD_PROTOCOL_MESSAGEPACK"] = self.options.with_protocol_messagepack
-        # Relocatable shared lib on Macos
         tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
+        tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
+        if Version(self.version) > "1.0.2": # pylint: disable=conan-unreachable-upper-version
+            raise ConanException("CMAKE_POLICY_VERSION_MINIMUM hardcoded to 3.5, check if new version supports CMake 4")
         tc.generate()
 
         deps = CMakeDeps(self)
@@ -105,6 +113,6 @@ class AnyRPCConan(ConanFile):
     def package_info(self):
         self.cpp_info.libs = ["anyrpc"]
         if not self.options.shared and self.settings.os == "Windows":
-                self.cpp_info.system_libs.append("ws2_32")
+            self.cpp_info.system_libs.append("ws2_32")
         if self.settings.os in ["Linux", "FreeBSD"]:
             self.cpp_info.system_libs.extend(["m", "pthread"])

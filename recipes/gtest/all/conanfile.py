@@ -7,7 +7,7 @@ from conan.tools.microsoft import is_msvc_static_runtime, msvc_runtime_flag
 from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.54.0"
+required_conan_version = ">=2.1"
 
 
 class GTestConan(ConanFile):
@@ -26,6 +26,7 @@ class GTestConan(ConanFile):
         "no_main": [True, False],
         "hide_symbols": [True, False],
         "debug_postfix": ["ANY"],
+        "disable_pthreads": [True, False],
     }
     default_options = {
         "shared": False,
@@ -34,7 +35,12 @@ class GTestConan(ConanFile):
         "no_main": False,
         "hide_symbols": False,
         "debug_postfix": "d",
+        "disable_pthreads": False,
     }
+    # disallow cppstd compatibility, as it affects the ABI in this library
+    # see https://github.com/conan-io/conan-center-index/issues/23854
+    # Requires Conan >=1.53.0 <2 || >=2.1.0 to work
+    extension_properties = {"compatibility_cppstd": False}
 
     @property
     def _min_cppstd(self):
@@ -113,11 +119,11 @@ class GTestConan(ConanFile):
 
         if self.settings.compiler.get_safe("runtime"):
             tc.variables["gtest_force_shared_crt"] = "MD" in msvc_runtime_flag(self)
-        if self.settings.os == "Windows" and self.settings.compiler == "gcc":
-            tc.variables["gtest_disable_pthreads"] = True
+        tc.variables["gtest_disable_pthreads"] = self.options.disable_pthreads
         if Version(self.version) < "1.12.0":
             # Relocatable shared lib on Macos
             tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
 
     def _patch_sources(self):
@@ -157,7 +163,8 @@ class GTestConan(ConanFile):
         self.cpp_info.components["libgtest"].libs = [f"gtest{self._postfix}"]
         if self.settings.os in ["Linux", "FreeBSD"]:
             self.cpp_info.components["libgtest"].system_libs.append("m")
-            self.cpp_info.components["libgtest"].system_libs.append("pthread")
+            if not self.options.disable_pthreads:
+                self.cpp_info.components["libgtest"].system_libs.append("pthread")
         if self.settings.os == "Neutrino" and self.settings.os.version == "7.1":
             self.cpp_info.components["libgtest"].system_libs.append("regex")
         if self.options.shared:
@@ -184,9 +191,3 @@ class GTestConan(ConanFile):
                 self.cpp_info.components["gmock_main"].set_property("pkg_config_name", "gmock_main")
                 self.cpp_info.components["gmock_main"].libs = [f"gmock_main{self._postfix}"]
                 self.cpp_info.components["gmock_main"].requires = ["gmock"]
-
-        # TODO: to remove in conan v2 once cmake_find_package_* generators removed
-        self.cpp_info.names["cmake_find_package"] = "GTest"
-        self.cpp_info.names["cmake_find_package_multi"] = "GTest"
-        self.cpp_info.components["libgtest"].names["cmake_find_package"] = "gtest"
-        self.cpp_info.components["libgtest"].names["cmake_find_package_multi"] = "gtest"

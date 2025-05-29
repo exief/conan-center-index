@@ -1,17 +1,20 @@
 from conan import ConanFile
-from conan.tools.files import get, copy, rmdir
 from conan.tools.cmake import CMake, CMakeDeps, CMakeToolchain, cmake_layout
+from conan.tools.files import get, copy, rmdir
+from conan.tools.scm import Version
 import os
 
-required_conan_version = ">=1.52.0"
+required_conan_version = ">=2.4"
+
 
 class AwsCSDKUtils(ConanFile):
     name = "aws-c-sdkutils"
     description = "C99 library implementing AWS SDK specific utilities. Includes utilities for ARN parsing, reading AWS profiles, etc..."
-    license = "Apache-2.0",
+    license = "Apache-2.0"
     url = "https://github.com/conan-io/conan-center-index"
     homepage = "https://github.com/awslabs/aws-c-sdkutils"
     topics = ("aws", "amazon", "cloud", "utility", "ARN")
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -22,37 +25,25 @@ class AwsCSDKUtils(ConanFile):
         "fPIC": True,
     }
 
-    def config_options(self):
-        if self.settings.os == "Windows":
-            del self.options.fPIC
-
-    def configure(self):
-        if self.options.shared:
-            try:
-                del self.options.fPIC
-            except Exception:
-                pass
-        try:
-            del self.settings.compiler.libcxx
-        except Exception:
-            pass
-        try:
-            del self.settings.compiler.cppstd
-        except Exception:
-            pass
+    implements = ["auto_shared_fpic"]
+    languages = "C"
 
     def layout(self):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
-        self.requires("aws-c-common/0.8.2")
+        if self.version == "0.2.3":
+            self.requires("aws-c-common/0.11.0", transitive_headers=True, transitive_libs=True)
+        elif self.version == "0.1.15":
+            self.requires("aws-c-common/0.9.15", transitive_headers=True, transitive_libs=True)
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-                  destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
     def generate(self):
         tc = CMakeToolchain(self)
+        if Version(self.version) < "0.2.3":
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5"
         tc.generate()
 
         deps = CMakeDeps(self)
@@ -68,18 +59,11 @@ class AwsCSDKUtils(ConanFile):
         cmake = CMake(self)
         cmake.install()
         rmdir(self, os.path.join(self.package_folder, "lib", "aws-c-sdkutils"))
+        rmdir(self, os.path.join(self.package_folder, "lib", "cmake"))
 
     def package_info(self):
         self.cpp_info.set_property("cmake_file_name", "aws-c-sdkutils")
         self.cpp_info.set_property("cmake_target_name", "AWS::aws-c-sdkutils")
-
-        self.cpp_info.filenames["cmake_find_package"] = "aws-c-sdkutils"
-        self.cpp_info.filenames["cmake_find_package_multi"] = "aws-c-sdkutils"
-        self.cpp_info.names["cmake_find_package"] = "AWS"
-        self.cpp_info.names["cmake_find_package_multi"] = "AWS"
-        self.cpp_info.components["aws-c-sdkutils-lib"].names["cmake_find_package"] = "aws-c-sdkutils"
-        self.cpp_info.components["aws-c-sdkutils-lib"].names["cmake_find_package_multi"] = "aws-c-sdkutils"
-        self.cpp_info.components["aws-c-sdkutils-lib"].set_property("cmake_target_name", "AWS::aws-c-sdkutils")
-
-        self.cpp_info.components["aws-c-sdkutils-lib"].libs = ["aws-c-sdkutils"]
-        self.cpp_info.components["aws-c-sdkutils-lib"].requires = ["aws-c-common::aws-c-common-lib"]
+        self.cpp_info.libs = ["aws-c-sdkutils"]
+        if self.options.shared:
+            self.cpp_info.defines.append("AWS_SDKUTILS_USE_IMPORT_EXPORT")

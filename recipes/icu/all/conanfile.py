@@ -6,7 +6,7 @@ import shutil
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.apple import is_apple_os
-from conan.tools.build import cross_building, stdcpp_library
+from conan.tools.build import cross_building, stdcpp_library, check_min_cppstd
 from conan.tools.env import Environment, VirtualBuildEnv
 from conan.tools.files import apply_conandata_patches, copy, export_conandata_patches, get, mkdir, rename, replace_in_file, rm, rmdir, save
 from conan.tools.gnu import Autotools, AutotoolsToolchain
@@ -24,8 +24,8 @@ class ICUConan(ConanFile):
     description = "ICU is a mature, widely used set of C/C++ and Java libraries " \
                   "providing Unicode and Globalization support for software applications."
     url = "https://github.com/conan-io/conan-center-index"
-    topics = ("icu", "icu4c", "i see you", "unicode")
-
+    topics = ("icu4c", "i see you", "unicode")
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -45,6 +45,20 @@ class ICUConan(ConanFile):
         "with_icuio": True,
         "with_extras": False,
     }
+
+    @property
+    def _min_cppstd(self):
+        return 17
+
+    @property
+    def _compilers_minimum_version(self):
+        return {
+            "gcc": "8",
+            "clang": "7",
+            "apple-clang": "12",
+            "Visual Studio": "16",
+            "msvc": "192",
+        }
 
     @property
     def _settings_build(self):
@@ -69,12 +83,22 @@ class ICUConan(ConanFile):
     def configure(self):
         if self.options.shared:
             self.options.rm_safe("fPIC")
+        if Version(self.version) >= "74.1":
+            self.license = "Unicode-3.0"
 
     def validate(self):
         if self.options.dat_package_file:
-            if not os.path.exists(self.options.dat_package_file):
+            if not os.path.exists(str(self.options.dat_package_file)):
                 raise ConanInvalidConfiguration("Non-existent dat_package_file specified")
-        
+        if Version(self.version) >= "75.1":
+            if self.settings.compiler.cppstd:
+                check_min_cppstd(self, self._min_cppstd)
+            minimum_version = self._compilers_minimum_version.get(str(self.settings.compiler), False)
+            if minimum_version and Version(self.settings.compiler.version) < minimum_version:
+                raise ConanInvalidConfiguration(
+                    f"{self.ref} requires C++{self._min_cppstd}, which your compiler does not support."
+                )
+
     def layout(self):
         basic_layout(self, src_folder="src")
 
@@ -110,6 +134,8 @@ class ICUConan(ConanFile):
         if check_min_vs(self, "180", raise_invalid=False):
             tc.extra_cflags.append("-FS")
             tc.extra_cxxflags.append("-FS")
+        if Version(self.version) >= "75.1" and not self.settings.compiler.cppstd and is_msvc(self):
+            tc.extra_cxxflags.append(f"-std:c++{self._min_cppstd}")
         if not self.options.shared:
             tc.extra_defines.append("U_STATIC_IMPLEMENTATION")
         if is_apple_os(self):

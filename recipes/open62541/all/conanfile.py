@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.tools.cmake import cmake_layout, CMake, CMakeToolchain, CMakeDeps
 from conan.tools.scm import Version
-from conan.tools.files import apply_conandata_patches, collect_libs, export_conandata_patches, rename, rm, rmdir, get
+from conan.tools.files import apply_conandata_patches, collect_libs, export_conandata_patches, copy, rm, rmdir, get
 from conan.errors import ConanInvalidConfiguration
 import glob
 import os
@@ -12,9 +12,6 @@ required_conan_version = ">=1.53.0"
 
 class Open62541Conan(ConanFile):
     name = "open62541"
-    license = "MPLv2"
-    homepage = "https://open62541.org/"
-    url = "https://github.com/conan-io/conan-center-index"
     description = "open62541 is an open source and free implementation of OPC UA " \
                   "(OPC Unified Architecture) written in the common subset of the " \
                   "C99 and C++98 languages. The library is usable with all major " \
@@ -23,11 +20,15 @@ class Open62541Conan(ConanFile):
                   "into existing applications. open62541 library is platform independent. " \
                   "All platform-specific functionality is implemented via exchangeable " \
                   "plugins. Plugin implementations are provided for the major operating systems."
+    license = ("MPL-2.0", "CC0-1.0")
+    url = "https://github.com/conan-io/conan-center-index"
+    homepage = "https://open62541.org/"
     topics = (
-        "opc ua", "open62541", "sdk", "server/client", "c", "iec-62541",
+        "opc ua", "sdk", "server/client", "c", "iec-62541",
         "industrial automation", "tsn", "time sensitive networks", "publish-subscirbe", "pubsub"
     )
 
+    package_type = "library"
     settings = "os", "compiler", "build_type", "arch"
     options = {
         "fPIC": [True, False],
@@ -107,7 +108,7 @@ class Open62541Conan(ConanFile):
         # UA_COMPILE_AS_CXX=cpp_compatible
         "cpp_compatible": [True, False],
         # UA_ENABLE_STATUSCODE_DESCRIPTIONS=readable_statuscodes
-        "readable_statuscodes": [True, False]
+        "readable_statuscodes": [True, False],
     }
     default_options = {
         "fPIC": True,
@@ -135,7 +136,7 @@ class Open62541Conan(ConanFile):
         "typenames": True,
         "hardening": True,
         "cpp_compatible": False,
-        "readable_statuscodes": True
+        "readable_statuscodes": True,
     }
 
     exports = "submoduledata.yml"
@@ -160,11 +161,6 @@ class Open62541Conan(ConanFile):
             self.settings.rm_safe("compiler.libcxx")
             self.settings.rm_safe("compiler.cppstd")
 
-        # Due to https://github.com/open62541/open62541/issues/4687 we cannot build with 1.2.2 + Windows + shared
-        if Version(self.version) >= "1.2.2" and self.settings.os == "Windows" and self.options.shared:
-            raise ConanInvalidConfiguration(
-                f"{self.ref} doesn't properly support shared lib on Windows")
-
         if self.options.subscription == "With Events":
             # Deprecated in 1.2.2
             self.output.warning(
@@ -181,7 +177,7 @@ class Open62541Conan(ConanFile):
         if self.options.encryption == "mbedtls":
             self.requires("mbedtls/2.25.0")
         elif self.options.encryption == "openssl":
-            self.requires("openssl/1.1.1s")
+            self.requires("openssl/[>=1.1 <4]")
         if self.options.web_socket:
             self.requires("libwebsockets/4.3.2")
         if self.options.discovery == "With Multicast" or "multicast" in str(self.options.discovery):
@@ -214,12 +210,10 @@ class Open62541Conan(ConanFile):
                 raise ConanInvalidConfiguration(
                     "Lower Open62541 versions than 1.1.0 are not cpp compatible due to -fpermisive flags")
 
-        # FIXME: correct clang versions condition
-        max_clang_version = "8" if Version(
-            self.version) < "1.1.0" else "9"
-        if self.settings.compiler == "clang" and Version(self.settings.compiler.version) > max_clang_version:
+        unsupported_clang_version = "8" if Version(self.version) < "1.1.0" else "9"
+        if self.settings.compiler == "clang" and Version(self.settings.compiler.version) == unsupported_clang_version:
             raise ConanInvalidConfiguration(
-                "Open62541 supports Clang up to {} compiler version".format(max_clang_version))
+                f"{self.ref} does not support Clang version {self.settings.compiler.version}")
 
         if self.settings.compiler == "clang":
             if Version(self.settings.compiler.version) < "5":
@@ -230,33 +224,30 @@ class Open62541Conan(ConanFile):
             raise ConanInvalidConfiguration(
                 "PubSub over Ethernet is not supported for your OS!")
 
+        # Due to https://github.com/open62541/open62541/issues/4687 we cannot build with 1.2.2 + Windows + shared
+        if Version(self.version) >= "1.2.2" and self.settings.os == "Windows" and self.options.shared:
+            raise ConanInvalidConfiguration(
+                f"{self.ref} doesn't properly support shared lib on Windows")
+
         if self.options.web_socket:
             if self.options["libwebsockets"].with_ssl != self.options.encryption:
                 raise ConanInvalidConfiguration(
                     "When web_socket is enabled, libwebsockets:with_ssl must have the value of open62541:encryption")
 
     def source(self):
-        get(self, **self.conan_data["sources"][self.version],
-            destination=self.source_folder, strip_root=True)
+        get(self, **self.conan_data["sources"][self.version], strip_root=True)
 
-        submodule_filename = os.path.join(
-            self.recipe_folder, 'submoduledata.yml')
+        submodule_filename = os.path.join(self.recipe_folder, 'submoduledata.yml')
         with open(submodule_filename, 'r') as submodule_stream:
             submodules_data = yaml.safe_load(submodule_stream)
             for path, submodule in submodules_data["submodules"][self.version].items():
-                filename = os.path.basename(submodule["url"])
-                archive_name = submodule["archive_pattern"].format(
-                    version=os.path.splitext(filename.replace('v', ''))[0])
-
-                submodule_data = {
-                    "url": submodule["url"],
-                    "sha256": submodule["sha256"]
-                }
-
-                get(self, **submodule_data)
-                submodule_source = os.path.join(self.source_folder, path)
-                rmdir(self, submodule_source)
-                rename(self, archive_name, submodule_source)
+                archive_name = os.path.splitext(
+                    os.path.basename(submodule["url"]))[0]
+                get(self, url=submodule["url"],
+                    sha256=submodule["sha256"],
+                    destination=path,
+                    filename=archive_name,
+                    strip_root=True)
 
     def _get_log_level(self):
         return {
@@ -334,6 +325,7 @@ class Open62541Conan(ConanFile):
                     tc.variables["UA_ENABLE_ENCRYPTION_OPENSSL"] = True
 
         tc.variables["UA_ENABLE_JSON_ENCODING"] = self.options.json_support
+        tc.variables["UA_ENABLE_PUBSUB_INFORMATIONMODEL"] = self.options.pub_sub != False
         tc.variables["UA_ENABLE_PUBSUB"] = self.options.pub_sub != False
         tc.variables["UA_ENABLE_PUBSUB_ENCRYPTION"] = self.options.pub_sub_encryption != False
 
@@ -356,7 +348,7 @@ class Open62541Conan(ConanFile):
         tc.variables["UA_ENABLE_STATUSCODE_DESCRIPTIONS"] = self.options.readable_statuscodes
         tc.variables["UA_ENABLE_HARDENING"] = self.options.hardening
 
-        if self.settings.compiler == "Visual Studio" and self.options.shared == True:
+        if self.settings.compiler == "msvc" and self.options.shared == True:
             tc.variables["UA_MSVC_FORCE_STATIC_CRT"] = True
 
         tc.variables["UA_COMPILE_AS_CXX"] = self.options.cpp_compatible
@@ -366,13 +358,13 @@ class Open62541Conan(ConanFile):
 
         tc.generate()
         tc = CMakeDeps(self)
+        tc.set_property("mbedtls", "cmake_additional_variables_prefixes", ["MBEDTLS"])
         tc.generate()
 
     def _patch_sources(self):
         apply_conandata_patches(self)
         if Version(self.version) >= "1.3.1":
-            os.unlink(os.path.join(self.source_folder,
-                      "tools", "cmake", "FindPython3.cmake"))
+            os.unlink(os.path.join(self.source_folder, "tools", "cmake", "FindPython3.cmake"))
 
     def build(self):
         self._patch_sources()
@@ -393,8 +385,9 @@ class Open62541Conan(ConanFile):
         return os.path.join(self._module_subfolder, "open62541Macros.cmake")
 
     def package(self):
-        self.copy("LICENSE", dst="licenses", src=self.source_folder)
-        self.copy("LICENSE-CC0", dst="licenses", src=self.source_folder)
+        licenses_dir = os.path.join(self.package_folder, "licenses")
+        copy(self, "LICENSE", src=self.source_folder, dst=licenses_dir)
+        copy(self, "LICENSE-CC0", src=self.source_folder, dst=licenses_dir)
         cmake = CMake(self)
         cmake.install()
 
@@ -408,10 +401,9 @@ class Open62541Conan(ConanFile):
         rmdir(self, os.path.join(self.package_folder, "lib", "pkgconfig"))
         rmdir(self, os.path.join(self.package_folder, "share"))
 
-        self.copy("generate_*.py", src=self._tools_subfolder,
-                  dst=os.path.join("res", "tools"))
-        self.copy("nodeset_compiler/*", src=self._tools_subfolder,
-                  dst=os.path.join("res", "tools"))
+        tools_dir = os.path.join(self.package_folder, "res", "tools")
+        copy(self, "generate_*.py", src=self._tools_subfolder, dst=tools_dir)
+        copy(self, "nodeset_compiler/*", src=self._tools_subfolder, dst=tools_dir)
 
     @staticmethod
     def _chmod_plus_x(filename):
@@ -423,10 +415,7 @@ class Open62541Conan(ConanFile):
         self.cpp_info.names["cmake_find_package_multi"] = "open62541"
         self.cpp_info.names["pkg_config"] = "open62541"
         self.cpp_info.libs = collect_libs(self)
-        self.cpp_info.includedirs = [
-            "include",
-            os.path.join("include", "open62541", "plugin")
-        ]
+        self.cpp_info.includedirs = ["include"]
 
         # required for creating custom servers from ua-nodeset
         self.conf_info.define("user.open62541:tools_dir", os.path.join(
@@ -439,14 +428,22 @@ class Open62541Conan(ConanFile):
 
         if self.options.single_header:
             self.cpp_info.defines.append("UA_ENABLE_AMALGAMATION")
-        if self.settings.os == "Windows":
-            self.cpp_info.system_libs.append("ws2_32")
-            self.cpp_info.includedirs.append(
-                os.path.join("include", "open62541", "win32"))
         else:
             self.cpp_info.includedirs.append(
-                os.path.join("include", "open62541", "posix"))
-        if self.settings.os in ("Linux", "FreeBSD"):
+                os.path.join("include", "open62541", "plugin"))
+            if Version(self.version) < "1.4.0":
+                if self.settings.os == "Windows":
+                    self.cpp_info.includedirs.append(
+                        os.path.join("include", "open62541", "win32"))
+                else:
+                    self.cpp_info.includedirs.append(
+                        os.path.join("include", "open62541", "posix"))
+
+        if self.settings.os == "Windows":
+            self.cpp_info.system_libs.append("ws2_32")
+            if Version(self.version) >= "1.4.6":
+                self.cpp_info.system_libs.append("iphlpapi")
+        elif self.settings.os in ("Linux", "FreeBSD"):
             self.cpp_info.system_libs.extend(["pthread", "m", "rt"])
 
         self.cpp_info.builddirs.append(self._module_subfolder)

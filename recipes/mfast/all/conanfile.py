@@ -10,21 +10,21 @@ from conan.tools.scm import Version
 import os
 import textwrap
 
-required_conan_version = ">=1.54.0"
+required_conan_version = ">=2.1"
 
 
 class mFASTConan(ConanFile):
     name = "mfast"
-    license = "LGPL-3.0"
-    url = "https://github.com/conan-io/conan-center-index"
-    homepage = "https://objectcomputing.com/"
     description = (
         "mFAST is a high performance C++ encoding/decoding library for FAST "
         "(FIX Adapted for STreaming) protocol"
     )
+    license = "LGPL-3.0"
+    url = "https://github.com/conan-io/conan-center-index"
+    homepage = "https://objectcomputing.github.io/mFAST/"
     topics = ("fast", "fix", "fix-adapted-for-streaming",
               "financial-information-exchange", "libraries", "cpp")
-
+    package_type = "library"
     settings = "os", "arch", "compiler", "build_type"
     options = {
         "shared": [True, False],
@@ -36,7 +36,6 @@ class mFASTConan(ConanFile):
         "fPIC": True,
         "with_sqlite3": False,
     }
-
     short_paths = True
 
     @property
@@ -71,10 +70,11 @@ class mFASTConan(ConanFile):
         cmake_layout(self, src_folder="src")
 
     def requirements(self):
-        self.requires("boost/1.75.0")
+        # transitive_headers=True because mfast/mfast_export.h includes boost/config.hpp
+        self.requires("boost/1.75.0", transitive_headers=True)
         self.requires("tinyxml2/9.0.0")
         if self.options.with_sqlite3:
-            self.requires("sqlite3/3.40.1")
+            self.requires("sqlite3/[>=3.43 <4]")
 
     def validate(self):
         if self.settings.compiler.get_safe("cppstd"):
@@ -103,8 +103,10 @@ class mFASTConan(ConanFile):
         tc.variables["BUILD_SQLITE3"] = self.options.with_sqlite3
         if not valid_min_cppstd(self, self._min_cppstd):
             tc.variables["CMAKE_CXX_STANDARD"] = self._min_cppstd
-        # Relocatable shared libs on macOS
-        tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
+        if Version(self.version) <= "1.2.2": # pylint: disable=conan-condition-evals-to-constant
+            # Relocatable shared libs on macOS
+            tc.cache_variables["CMAKE_POLICY_DEFAULT_CMP0042"] = "NEW"
+            tc.cache_variables["CMAKE_POLICY_VERSION_MINIMUM"] = "3.5" # CMake 4 support
         tc.generate()
         deps = CMakeDeps(self)
         deps.generate()
@@ -169,18 +171,28 @@ class mFASTConan(ConanFile):
         fast_type_filename = "fast_type_gen" + extension
         module_folder_depth = len(os.path.normpath(self._new_mfast_config_dir).split(os.path.sep))
         fast_type_rel_path = "{}bin/{}".format("".join(["../"] * module_folder_depth), fast_type_filename)
-        exec_target_content = textwrap.dedent("""\
+        exec_target_content = textwrap.dedent(f"""\
             if(NOT TARGET fast_type_gen)
+                # Locate fast_type_gen executable
+                ## Workaround for legacy "cmake" generator in case of cross-build
                 if(CMAKE_CROSSCOMPILING)
-                    find_program(MFAST_EXECUTABLE fast_type_gen PATHS ENV PATH NO_DEFAULT_PATH)
+                    find_program(MFAST_EXECUTABLE NAMES fast_type_gen PATHS ENV PATH NO_DEFAULT_PATH)
                 endif()
+                ## And here this will work fine with "CMakeToolchain" (for native & cross-build)
+                ## and legacy "cmake" generator in case of native build
+                if(NOT MFAST_EXECUTABLE)
+                    find_program(MFAST_EXECUTABLE NAMES fast_type_gen)
+                endif()
+                ## Last resort: we search in package folder directly
                 if(NOT MFAST_EXECUTABLE)
                     get_filename_component(MFAST_EXECUTABLE "${{CMAKE_CURRENT_LIST_DIR}}/{fast_type_rel_path}" ABSOLUTE)
                 endif()
+
+                # Create executable imported target fast_type_gen
                 add_executable(fast_type_gen IMPORTED)
                 set_property(TARGET fast_type_gen PROPERTY IMPORTED_LOCATION ${{MFAST_EXECUTABLE}})
             endif()
-        """.format(fast_type_rel_path=fast_type_rel_path))
+        """)
         module_abs_path = os.path.join(self.package_folder, self._fast_type_gen_target_file)
         old_content = load(self, module_abs_path)
         new_content = exec_target_content + old_content
@@ -262,22 +274,9 @@ class mFASTConan(ConanFile):
             if self.options.shared:
                 self.cpp_info.components[conan_comp].defines = ["MFAST_DYN_LINK"]
 
-            # TODO: to remove in conan v2 once cmake_find_package* generators removed
-            self.cpp_info.components[conan_comp].names["cmake_find_package"] = target
-            self.cpp_info.components[conan_comp].names["cmake_find_package_multi"] = target
-            self.cpp_info.components[conan_comp].build_modules["cmake"] = [self._fast_type_gen_target_file]
-            build_modules = [self._lib_targets_module_file, self._fast_type_gen_target_file]
-            self.cpp_info.components[conan_comp].build_modules["cmake_find_package"] = build_modules
-            self.cpp_info.components[conan_comp].build_modules["cmake_find_package_multi"] = build_modules
             if comp != target:
                 conan_comp_alias = conan_comp + "_alias"
-                self.cpp_info.components[conan_comp_alias].names["cmake_find_package"] = comp
-                self.cpp_info.components[conan_comp_alias].names["cmake_find_package_multi"] = comp
                 self.cpp_info.components[conan_comp_alias].requires = [conan_comp]
                 self.cpp_info.components[conan_comp_alias].includedirs = []
                 self.cpp_info.components[conan_comp_alias].libdirs = []
                 self.cpp_info.components[conan_comp_alias].bindirs = []
-
-        # TODO: to remove in conan v2 once cmake_find_package* generators removed
-        self.cpp_info.names["cmake_find_package"] = "mFAST"
-        self.cpp_info.names["cmake_find_package_multi"] = "mFAST"

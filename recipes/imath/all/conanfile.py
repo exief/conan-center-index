@@ -1,7 +1,8 @@
 from conan import ConanFile
 from conan.tools.build import check_min_cppstd
 from conan.tools.cmake import CMake, CMakeToolchain, cmake_layout
-from conan.tools.files import collect_libs, copy, get, rmdir
+from conan.tools.files import apply_conandata_patches, collect_libs, copy, export_conandata_patches, get, rmdir
+from conan.tools.microsoft import is_msvc
 import os
 
 required_conan_version = ">=1.53.0"
@@ -29,6 +30,9 @@ class ImathConan(ConanFile):
         "fPIC": True,
     }
 
+    def export_sources(self):
+        export_conandata_patches(self)
+
     def config_options(self):
         if self.settings.os == "Windows":
             del self.options.fPIC
@@ -49,9 +53,15 @@ class ImathConan(ConanFile):
 
     def generate(self):
         tc = CMakeToolchain(self)
+        if is_msvc(self) and self.settings.compiler.get_safe("cppstd"):
+            # when msvc is working with a C++ standard level higher
+            # than the default, we need the __cplusplus macro to be correct
+            tc.variables["CMAKE_CXX_FLAGS"] = "/Zc:__cplusplus"
         tc.generate()
 
     def build(self):
+        apply_conandata_patches(self)
+
         cmake = CMake(self)
         cmake.configure()
         cmake.build()
